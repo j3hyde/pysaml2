@@ -16,6 +16,7 @@ import six
 
 from time import mktime
 from binascii import hexlify
+from contextlib import contextmanager
 
 from future.backports.urllib.parse import urlencode
 
@@ -379,6 +380,49 @@ def make_temp(string, suffix="", decode=True, delete=True):
         ntf.write(string)
     ntf.seek(0)
     return ntf, ntf.name
+
+
+@contextmanager
+def make_temp_ctx(string, suffix="", decode=True, delete=True):
+    """ Creates a temp file using make_temp :func:`saml2.make_temp()` and
+    deletes the file when the context is closed.  Note that this function
+    closes the file prior to returning.  Thus the file pointer is not usable.
+    If needed, simply reopen the file.  This is essentially how xmlsec works
+    (being an external application).
+
+    >>> with make_temp_ctx("Hello world!") as (f, n):
+    ...     f.read() == "Hello world!"
+    ...     with open(n) as f2:
+    ...         f2.read() == "Hellow world!"
+
+    Based on considerations here: https://bugs.python.org/issue14243
+
+    :param string: The information to be placed in the file
+    :param suffix: The temporary file might have to have a specific
+        suffix in certain circumstances.
+    :param decode: The input string might be base64 coded. If so it
+        must, in some cases, be decoded before being placed in the file.
+    :param delete: Whether the file should be deleted when the context is
+        closed.
+    :return: 2-tuple with file pointer ( so the calling function can
+        work with the file) and filename (which is for instance needed by the
+        xmlsec function).
+    """
+    # Make a temp file as normal
+    f, n = make_temp(string, suffix, decode, delete=False)
+
+    f.close() # For Windows compatibility
+
+    try:
+        # Give it away
+        yield f, n
+    finally:
+        if delete:
+            try:
+                # Now that we're _really_ done, try to delete the file
+                os.unlink(n)
+            except OSError:
+                pass
 
 
 def split_len(seq, length):
@@ -832,20 +876,20 @@ class CryptoBackendXmlSec1(CryptoBackend):
         :return:
         """
         logger.debug("Encryption input len: %d", len(text))
-        _, fil = make_temp(str(text).encode('utf-8'), decode=False)
+        with make_temp_ctx(str(text).encode('utf-8'), decode=False) as (_, fil):
 
-        com_list = [self.xmlsec, "--encrypt", "--pubkey-cert-pem", recv_key,
-                    "--session-key", session_key_type, "--xml-data", fil]
+            com_list = [self.xmlsec, "--encrypt", "--pubkey-cert-pem", recv_key,
+                        "--session-key", session_key_type, "--xml-data", fil]
 
-        if xpath:
-            com_list.extend(['--node-xpath', xpath])
+            if xpath:
+                com_list.extend(['--node-xpath', xpath])
 
-        (_stdout, _stderr, output) = self._run_xmlsec(com_list, [template],
-                                                      exception=DecryptError,
-                                                      validate_output=False)
-        if isinstance(output, six.binary_type):
-            output = output.decode('utf-8')
-        return output
+            (_stdout, _stderr, output) = self._run_xmlsec(com_list, [template],
+                                                          exception=DecryptError,
+                                                          validate_output=False)
+            if isinstance(output, six.binary_type):
+                output = output.decode('utf-8')
+            return output
 
     def encrypt_assertion(self, statement, enc_key, template,
                           key_type="des-192", node_xpath=None, node_id=None):
@@ -862,27 +906,25 @@ class CryptoBackendXmlSec1(CryptoBackend):
         if isinstance(statement, SamlBase):
             statement = pre_encrypt_assertion(statement)
 
-        _, fil = make_temp(str(statement).encode('utf-8'), decode=False,
-                           delete=False)
-        _, tmpl = make_temp(str(template).encode('utf-8'), decode=False)
+        with make_temp_ctx(str(statement).encode('utf-8'), decode=False) as (_, fil), \
+             make_temp_ctx(str(template).encode('utf-8'), decode=False) as (_, tmpl):
 
-        if not node_xpath:
-            node_xpath = ASSERT_XPATH
+            if not node_xpath:
+                node_xpath = ASSERT_XPATH
 
-        com_list = [self.xmlsec, "encrypt", "--pubkey-cert-pem", enc_key,
-                    "--session-key", key_type, "--xml-data", fil,
-                    "--node-xpath", node_xpath]
-        if node_id:
-            com_list.extend(["--node-id", node_id])
+            com_list = [self.xmlsec, "encrypt", "--pubkey-cert-pem", enc_key,
+                        "--session-key", key_type, "--xml-data", fil,
+                        "--node-xpath", node_xpath]
+            if node_id:
+                com_list.extend(["--node-id", node_id])
 
-        (_stdout, _stderr, output) = self._run_xmlsec(
-            com_list, [tmpl], exception=EncryptError, validate_output=False)
+            (_stdout, _stderr, output) = self._run_xmlsec(
+                com_list, [tmpl], exception=EncryptError, validate_output=False)
 
-        os.unlink(fil)
-        if not output:
-            raise EncryptError(_stderr)
+            if not output:
+                raise EncryptError(_stderr)
 
-        return output.decode('utf-8')
+            return output.decode('utf-8')
 
     def decrypt(self, enctext, key_file):
         """
@@ -893,15 +935,15 @@ class CryptoBackendXmlSec1(CryptoBackend):
         """
 
         logger.debug("Decrypt input len: %d", len(enctext))
-        _, fil = make_temp(str(enctext).encode('utf-8'), decode=False)
+        with make_temp_ctx(str(enctext).encode('utf-8'), decode=False) as (_, fil):
 
-        com_list = [self.xmlsec, "--decrypt", "--privkey-pem",
-                    key_file, "--id-attr:%s" % ID_ATTR, ENC_KEY_CLASS]
+            com_list = [self.xmlsec, "--decrypt", "--privkey-pem",
+                        key_file, "--id-attr:%s" % ID_ATTR, ENC_KEY_CLASS]
 
-        (_stdout, _stderr, output) = self._run_xmlsec(com_list, [fil],
-                                                      exception=DecryptError,
-                                                      validate_output=False)
-        return output.decode('utf-8')
+            (_stdout, _stderr, output) = self._run_xmlsec(com_list, [fil],
+                                                          exception=DecryptError,
+                                                          validate_output=False)
+            return output.decode('utf-8')
 
     def sign_statement(self, statement, node_name, key_file, node_id,
                        id_attr):
@@ -919,28 +961,28 @@ class CryptoBackendXmlSec1(CryptoBackend):
         if isinstance(statement, SamlBase):
             statement = str(statement)
 
-        _, fil = make_temp(statement, suffix=".xml",
-                           decode=False, delete=self._xmlsec_delete_tmpfiles)
+        with make_temp_ctx(statement, suffix=".xml",
+                       decode=False, delete=self._xmlsec_delete_tmpfiles) as (_, fil):
 
-        com_list = [self.xmlsec, "--sign",
-                    "--privkey-pem", key_file,
-                    "--id-attr:%s" % id_attr, node_name]
-        if node_id:
-            com_list.extend(["--node-id", node_id])
+            com_list = [self.xmlsec, "--sign",
+                        "--privkey-pem", key_file,
+                        "--id-attr:%s" % id_attr, node_name]
+            if node_id:
+                com_list.extend(["--node-id", node_id])
 
-        try:
-            (stdout, stderr, signed_statement) = self._run_xmlsec(
-                com_list, [fil], validate_output=False)
-            # this doesn't work if --store-signatures are used
-            if stdout == "":
-                if signed_statement:
-                    return signed_statement.decode('utf-8')
-            logger.error(
-                "Signing operation failed :\nstdout : %s\nstderr : %s",
-                stdout, stderr)
-            raise SigverError(stderr)
-        except DecryptError:
-            raise SigverError("Signing failed")
+            try:
+                (stdout, stderr, signed_statement) = self._run_xmlsec(
+                    com_list, [fil], validate_output=False)
+                # this doesn't work if --store-signatures are used
+                if stdout == "":
+                    if signed_statement:
+                        return signed_statement.decode('utf-8')
+                logger.error(
+                    "Signing operation failed :\nstdout : %s\nstderr : %s",
+                    stdout, stderr)
+                raise SigverError(stderr)
+            except DecryptError:
+                raise SigverError("Signing failed")
 
     def validate_signature(self, signedtext, cert_file, cert_type, node_name,
                            node_id, id_attr):
@@ -957,34 +999,34 @@ class CryptoBackendXmlSec1(CryptoBackend):
         """
         if not isinstance(signedtext, six.binary_type):
             signedtext = signedtext.encode('utf-8')
-        _, fil = make_temp(signedtext, suffix=".xml",
-                           decode=False, delete=self._xmlsec_delete_tmpfiles)
+        with make_temp_ctx(signedtext, suffix=".xml",
+                       decode=False, delete=self._xmlsec_delete_tmpfiles) as (_, fil):
 
-        com_list = [self.xmlsec, "--verify",
-                    "--pubkey-cert-%s" % cert_type, cert_file,
-                    "--id-attr:%s" % id_attr, node_name]
+            com_list = [self.xmlsec, "--verify",
+                        "--pubkey-cert-%s" % cert_type, cert_file,
+                        "--id-attr:%s" % id_attr, node_name]
 
-        if self.debug:
-            com_list.append("--store-signatures")
+            if self.debug:
+                com_list.append("--store-signatures")
 
-        if node_id:
-            com_list.extend(["--node-id", node_id])
+            if node_id:
+                com_list.extend(["--node-id", node_id])
 
-        if self.__DEBUG:
-            try:
-                print(" ".join(com_list))
-            except TypeError:
-                print("cert_type", cert_type)
-                print("cert_file", cert_file)
-                print("node_name", node_name)
-                print("fil", fil)
-                raise
-            print("%s: %s" % (cert_file, os.access(cert_file, os.F_OK)))
-            print("%s: %s" % (fil, os.access(fil, os.F_OK)))
+            if self.__DEBUG:
+                try:
+                    print(" ".join(com_list))
+                except TypeError:
+                    print("cert_type", cert_type)
+                    print("cert_file", cert_file)
+                    print("node_name", node_name)
+                    print("fil", fil)
+                    raise
+                print("%s: %s" % (cert_file, os.access(cert_file, os.F_OK)))
+                print("%s: %s" % (fil, os.access(fil, os.F_OK)))
 
-        (_stdout, stderr, _output) = self._run_xmlsec(com_list, [fil],
-                                                      exception=SignatureError)
-        return parse_xmlsec_output(stderr)
+            (_stdout, stderr, _output) = self._run_xmlsec(com_list, [fil],
+                                                          exception=SignatureError)
+            return parse_xmlsec_output(stderr)
 
     def _run_xmlsec(self, com_list, extra_args, validate_output=True,
                     exception=XmlsecError):
@@ -1457,8 +1499,8 @@ class SecurityContext(object):
             if _key is not None and len(_key.strip()) > 0:
                 if not isinstance(_key, six.binary_type):
                     _key = str(_key).encode('ascii')
-                _, key_file = make_temp(_key, decode=False)
-                _enctext = self.crypto.decrypt(enctext, key_file)
+                with make_temp_ctx(_key, decode=False) as (_, key_file):
+                    _enctext = self.crypto.decrypt(enctext, key_file)
                 if _enctext is not None and len(_enctext) > 0:
                     return _enctext
         return enctext
@@ -1788,14 +1830,16 @@ class SecurityContext(object):
         if not id_attr:
             id_attr = ID_ATTR
 
-        if not key_file and key:
-            _, key_file = make_temp(str(key).encode('utf-8'), ".pem")
+        with make_temp_ctx(str(key).encode('utf-8'), ".pem") as (_, tmp_file):
 
-        if not key and not key_file:
-            key_file = self.key_file
+            if not key_file and key:
+                _, key_file = _, tmp_file
 
-        return self.crypto.sign_statement(statement, node_name, key_file,
-                                          node_id, id_attr)
+            if not key and not key_file:
+                key_file = self.key_file
+
+            return self.crypto.sign_statement(statement, node_name, key_file,
+                                              node_id, id_attr)
 
     def sign_assertion_using_xmlsec(self, statement, **kwargs):
         """ Deprecated function. See sign_assertion(). """

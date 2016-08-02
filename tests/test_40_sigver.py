@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-import base64
+import base64, os
 from saml2.xmldsig import SIG_RSA_SHA256
 from saml2 import sigver
 from saml2 import extension_elements_to_elements
@@ -9,7 +9,7 @@ from saml2 import time_util
 from saml2 import saml, samlp
 from saml2 import config
 from saml2.sigver import pre_encryption_part
-from saml2.sigver import make_temp
+from saml2.sigver import make_temp, make_temp_ctx
 from saml2.sigver import XmlsecError
 from saml2.sigver import SigverError
 from saml2.mdstore import MetadataStore
@@ -552,6 +552,13 @@ def test_xmlsec_output_line_parsing():
 
     output4 = "prefix\r\nFAIL\r\npostfix"
     raises(sigver.XmlsecError, sigver.parse_xmlsec_output, output4)
+
+def test_make_temp_keeps_file():
+    with make_temp_ctx("Hello world!", decode=False) as (f, n):
+        assert os.path.exists(n)
+        with open(n) as f2:
+            assert f2.read() == "Hello world!"
+    assert not os.path.exists(n)
 
 
 if __name__ == "__main__":
