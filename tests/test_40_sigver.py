@@ -459,30 +459,30 @@ def test_xbox():
     encrypted_assertion = EncryptedAssertion()
     encrypted_assertion.add_extension_element(_ass0)
 
-    _, pre = make_temp(str(pre_encryption_part()).encode('utf-8'), decode=False)
-    enctext = sec.crypto.encrypt(
-        str(encrypted_assertion), conf.cert_file, pre, "des-192",
-        '/*[local-name()="EncryptedAssertion"]/*[local-name()="Assertion"]')
+    with make_temp_ctx(str(pre_encryption_part()).encode('utf-8'), decode=False) as (_, pre):
+        enctext = sec.crypto.encrypt(
+            str(encrypted_assertion), conf.cert_file, pre, "des-192",
+            '/*[local-name()="EncryptedAssertion"]/*[local-name()="Assertion"]')
 
 
-    decr_text = sec.decrypt(enctext)
-    _seass = saml.encrypted_assertion_from_string(decr_text)
-    assertions = []
-    assers = extension_elements_to_elements(_seass.extension_elements,
-                                            [saml, samlp])
+        decr_text = sec.decrypt(enctext)
+        _seass = saml.encrypted_assertion_from_string(decr_text)
+        assertions = []
+        assers = extension_elements_to_elements(_seass.extension_elements,
+                                                [saml, samlp])
 
-    sign_cert_file = full_path("test.pem")
+        sign_cert_file = full_path("test.pem")
 
-    for ass in assers:
-        _ass = "%s" % ass
-        #_ass = _ass.replace('xsi:nil="true" ', '')
-        #assert sigass == _ass
-        _txt = sec.verify_signature(_ass, sign_cert_file,
-                                    node_name=class_name(assertion))
-        if _txt:
-            assertions.append(ass)
+        for ass in assers:
+            _ass = "%s" % ass
+            #_ass = _ass.replace('xsi:nil="true" ', '')
+            #assert sigass == _ass
+            _txt = sec.verify_signature(_ass, sign_cert_file,
+                                        node_name=class_name(assertion))
+            if _txt:
+                assertions.append(ass)
 
-    print(assertions)
+        print(assertions)
 
 
 def test_xmlsec_err():
