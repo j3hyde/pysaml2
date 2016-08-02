@@ -1039,32 +1039,35 @@ class CryptoBackendXmlSec1(CryptoBackend):
         :param exception: The exception class to raise on errors
         :result: Whatever xmlsec wrote to an --output temporary file
         """
-        ntf = NamedTemporaryFile(suffix=".xml",
-                                 delete=self._xmlsec_delete_tmpfiles)
-        com_list.extend(["--output", ntf.name])
-        com_list += extra_args
+        with make_temp_ctx("", suffix=".xml",
+                           delete=self._xmlsec_delete_tmpfiles) as (ntf, name):
+            com_list.extend(["--output", ntf.name])
+            com_list += extra_args
 
-        logger.debug("xmlsec command: %s", " ".join(com_list))
+            logger.debug("xmlsec command: %s", " ".join(com_list))
 
-        pof = Popen(com_list, stderr=PIPE, stdout=PIPE)
+            pof = Popen(com_list, stderr=PIPE, stdout=PIPE)
 
-        p_out = pof.stdout.read().decode('utf-8')
-        p_err = pof.stderr.read().decode('utf-8')
-        pof.wait()
+            p_out = pof.stdout.read().decode('utf-8')
+            p_err = pof.stderr.read().decode('utf-8')
+            pof.wait()
 
-        if pof.returncode is not None and pof.returncode < 0:
-            logger.error(LOG_LINE, p_out, p_err)
-            raise XmlsecError("%d:%s" % (pof.returncode, p_err))
+            if pof.returncode is not None and pof.returncode < 0:
+                logger.error(LOG_LINE, p_out, p_err)
+                raise XmlsecError("%d:%s" % (pof.returncode, p_err))
 
-        try:
-            if validate_output:
-                parse_xmlsec_output(p_err)
-        except XmlsecError as exc:
-            logger.error(LOG_LINE_2, p_out, p_err, exc)
-            raise
+            try:
+                if validate_output:
+                    parse_xmlsec_output(p_err)
+            except XmlsecError as exc:
+                logger.error(LOG_LINE_2, p_out, p_err, exc)
+                raise
 
-        ntf.seek(0)
-        return p_out, p_err, ntf.read()
+            # File was previously closed to facilitate xmlsec on Windows
+            # Now reopen it for read
+            ntf = open(ntf.name, 'rb')
+            ntf.seek(0)
+            return p_out, p_err, ntf.read()
 
 
 class CryptoBackendXMLSecurity(CryptoBackend):
