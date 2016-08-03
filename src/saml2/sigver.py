@@ -1574,21 +1574,13 @@ class SecurityContext(object):
                 _certs = []
             certs = []
             for cert in _certs:
-                if isinstance(cert, six.string_types):
-                    certs.append(make_temp(pem_format(cert), suffix=".pem",
-                                           decode=False,
-                                           delete=self._xmlsec_delete_tmpfiles))
-                else:
-                    certs.append(cert)
+                certs.append(cert)
         else:
             certs = []
 
         if not certs and not self.only_use_keys_in_metadata:
             logger.debug("==== Certs from instance ====")
-            certs = [make_temp(pem_format(cert), suffix=".pem",
-                               decode=False,
-                               delete=self._xmlsec_delete_tmpfiles)
-                     for cert in cert_from_instance(item)]
+            certs = cert_from_instance(item)
         else:
             logger.debug("==== Certs from metadata ==== %s: %s ====", issuer,
                          certs)
@@ -1600,14 +1592,26 @@ class SecurityContext(object):
 
         verified = False
         last_pem_file = None
-        for _, pem_file in certs:
+        for cert in certs:
             try:
-                last_pem_file = pem_file
-                if self.verify_signature(decoded_xml, pem_file,
-                                         node_name=node_name,
-                                         node_id=item.id, id_attr=id_attr):
-                    verified = True
-                    break
+                if isinstance(cert, six.string_types):
+                    with make_temp_ctx(pem_format(cert), suffix=".pem",
+                                       decode=False,
+                                       delete=self._xmlsec_delete_tmpfiles) as (_, pem_file):
+                        last_pem_file = pem_file
+                        if self.verify_signature(decoded_xml, pem_file,
+                                                 node_name=node_name,
+                                                 node_id=item.id, id_attr=id_attr):
+                            verified = True
+                            break
+                else:
+                    _, pem_file = cert
+                    last_pem_file = pem_file
+                    if self.verify_signature(decoded_xml, pem_file,
+                                             node_name=node_name,
+                                             node_id=item.id, id_attr=id_attr):
+                        verified = True
+                        break
             except XmlsecError as exc:
                 logger.error("check_sig: %s", exc)
                 pass
